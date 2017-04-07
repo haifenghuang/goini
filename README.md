@@ -2,14 +2,17 @@
 使用状态机实现的配置文件解析器
 
 ## 特性
-1. 简单轻量（API函数只有两个）
+1. 简单轻量（API函数只有三个）
 2. 使用状态机实现
 3. 支持全局Section和自定义Section
 4. key-value的value支持多行
 5. 支持对不同回车换行符的正确解析
 
 ## API说明
-此解析器提供了两个API函数供用户使用。
+此解析器提供了三个API函数供用户使用。
+
+### func CfgParseFile(filename string) error
+对配置文件进行解析(使用文件名)
 
 ### func CfgParse(r io.Reader) error
 对配置文件进行解析

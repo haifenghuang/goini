@@ -6,6 +6,7 @@ import (
 	. "fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 //Represent a key-value
@@ -102,7 +103,6 @@ func newValue(state int, symbol rune) error {
 		gLastOption = option
 
 		gLastOption.name = keyName
-		Printf("newValue, gLastOption.name=[%s]\n", gLastOption.name)
 		keyName = ""
 	}
 	if symbol != '=' {
@@ -123,6 +123,41 @@ func newLine(state int, symbol rune) error {
 }
 
 //FSM ACTION FUNCTIONS --  END
+
+func clearInnerData() {
+	gSections.options = nil
+	gSections.next = nil
+	gSections.name = ""
+
+	if gLastSection != nil {
+		if gLastSection.options != nil {
+			gLastSection.options = nil
+		}
+		gLastSection.next = nil
+		gLastSection.name = ""
+	}
+
+	if gLastOption != nil {
+		if gLastOption.next != nil {
+			gLastOption.next = nil
+		}
+		gLastOption.name = ""
+		gLastOption.value = ""
+	}
+
+	keyName, buffer = "", ""
+	meetSection, line = false, 1
+}
+
+func CfgParseFile(filename string) error {
+	fin, err := os.Open(filename)
+	if err != nil {
+	    return err
+	}
+	defer fin.Close()
+
+	return CfgParse(fin)
+}
 
 func CfgParse(r io.Reader) error {
 	//Rules for describing the state change and associated actions for the FSM
@@ -161,6 +196,8 @@ func CfgParse(r io.Reader) error {
 		/* state = [EndSection] - 3 */
 		{3, ';', 1, nil},
 		{3, '#', 1, nil},
+		{3, '\n', 0, newLine},
+		{3, '\r', 7, nil},
 		{3, 0, 3, nil}, //? "[xxx] yyyy", then yyyy will be ignored
 
 		/* state = [InValue] - 4 */
@@ -191,7 +228,8 @@ func CfgParse(r io.Reader) error {
 		/* state = [Invalid] - 8 */
 		{8, 0, -1, parseError},
 	}
-	var _ = fsm
+
+	clearInnerData()
 
 	state := 0
 	line = 1
@@ -222,6 +260,7 @@ func CfgParse(r io.Reader) error {
 	} //outer for
 
 	if state != 0 {
+		Printf("state is %d\n", state)
 		return ErrMalFormed
 	}
 
@@ -308,10 +347,35 @@ func main() {
 	var err error
 
 	//open file for reading
-	fin, _ := os.Open("./test.ini")
-	defer fin.Close()
+	//fin, _ := os.Open("./test.ini")
+	//defer fin.Close()
 
-	if err = CfgParse(fin); err != nil {
+	//if err = CfgParse(fin); err != nil {
+	//	Printf("Error:%s", err.Error())
+	//	return
+	//}
+
+	//read from string
+	const testData = `
+	server = "the forgotten server"
+	
+	[test_data]
+	
+	author = "raggaer"
+	author_email = "xxx@gmail.com"
+	author_age = 20
+	`
+
+	if err = CfgParse(strings.NewReader(testData)); err != nil {
+	//if err = CfgParse(bytes.NewBufferString(testData)); err != nil {  //OK, needs to import "bytes"
+		Printf("Error:%s", err.Error())
+	}
+	CfgPrint()
+	Println("\n\n\n\n")
+
+
+
+	if err = CfgParseFile("./test.ini"); err != nil {
 		Printf("Error:%s", err.Error())
 		return
 	}
