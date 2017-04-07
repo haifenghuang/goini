@@ -137,6 +137,7 @@ func CfgParse(r io.Reader) error {
 		/* state = [InOptions] - 0*/
 		/* key name could not have space */
 		{0, '\n', 0, newLine},
+		{0, '\r', 7, nil},
 		{0, ' ', 0, nil},  /* skip whitespace */
 		{0, '\t', 0, nil}, /* skip whitespace */
 		{0, ';', 1, nil},
@@ -147,13 +148,14 @@ func CfgParse(r io.Reader) error {
 
 		/* state = [Comment] - 1 */
 		{1, '\n', 0, newLine},
+		{1, '\r', 7, nil},
 		{1, 0, 1, nil},
 
 		/* state = [InSection] - 2 */
 		/* section name could have space */
 		{2, ']', 3, endSection},
-		//rule{2, ';', 7, nil},      /* section could not contail ';' */
-		//rule{2, '#', 7, nil},      /* section could not contail '#' */
+		//rule{2, ';', 8, nil},      /* section could not contail ';' */
+		//rule{2, '#', 8, nil},      /* section could not contail '#' */
 		{2, 0, 2, newSection}, /* section could contail ';' or '#' */
 
 		/* state = [EndSection] - 3 */
@@ -168,6 +170,7 @@ func CfgParse(r io.Reader) error {
 		{4, ' ', 4, nil},  /* skip whitespace */
 		{4, '\t', 4, nil}, /* skip whitespace */
 		{4, '\n', 0, newLine},
+		{4, '\r', 7, nil},
 		{4, 0, 4, newValue},
 
 		/* state = [InStr] - 5 */
@@ -181,8 +184,12 @@ func CfgParse(r io.Reader) error {
 		/* state = [StrQuote] - 6 */
 		{6, 0, 5, newValue},
 
-		/* state = [Invalid] - 7 */
-		{7, 0, -1, parseError},
+		/* state = [CHECKLINE] - 7 */
+		{7, '\n', 0, newLine},
+		{7, 0,    0, newLine},
+
+		/* state = [Invalid] - 8 */
+		{8, 0, -1, parseError},
 	}
 	var _ = fsm
 
