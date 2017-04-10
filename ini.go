@@ -5,6 +5,8 @@ import (
 	"errors"
 	. "fmt"
 	"io"
+	"bytes"
+    "io/ioutil"
 	"os"
 	"strings"
 )
@@ -23,150 +25,148 @@ type tagSections struct {
 	name    string       //the name of the section
 }
 
-var (
-	gSections    tagSections
-	gLastSection *tagSections
-	gLastOption  *tagOptions
-	keyName      string
-	buffer       string
-	meetSection  bool
-	line         int
+type Config struct {
+	*config
+}
 
+type config struct {
+	reader      *bufio.Reader
+	sections    tagSections
+	lastSection *tagSections
+	lastOption  *tagOptions
+	keyName     string
+	buffer      string
+	meetSection bool
+	line        int
+}
+
+var (
 	ErrParserError = errors.New("Parser error")
 	ErrMalFormed   = errors.New("Input is malformed, ends inside comment or literal")
 	ErrKeyNotFound = errors.New("key not found")
 )
 
 //FSM ACTION FUNCTIONS --  BEGIN
-func parseError(state int, symbol rune) error {
+func parseError(cfg *config, state int, symbol rune) error {
 	return ErrParserError
 }
 
-func newSection(state int, symbol rune) error {
+func newSection(cfg *config, state int, symbol rune) error {
 	if symbol != '[' {
-		buffer += string(symbol)
+		cfg.buffer += string(symbol)
 	}
 
-	meetSection = true
+	cfg.meetSection = true
 	return nil
 }
 
-func endSection(state int, symbol rune) error {
+func endSection(cfg *config, state int, symbol rune) error {
 	var cur *tagSections
 
 	sec := new(tagSections)
 
-	if gSections.next == nil { /* no section yet */
-		gSections.next = sec
+	if cfg.sections.next == nil { /* no section yet */
+		cfg.sections.next = sec
 	} else {
-		cur = &gSections
+		cur = &cfg.sections
 		for cur.next != nil {
 			cur = cur.next
 		}
 		cur.next = sec
 	}
 
-	gLastSection = sec
-	gLastSection.name = buffer
-	buffer = ""
+	cfg.lastSection = sec
+	cfg.lastSection.name = cfg.buffer
+	cfg.buffer = ""
 
 	return nil
 }
 
-func newOption(state int, symbol rune) error {
-	keyName += string(symbol)
+func newOption(cfg *config, state int, symbol rune) error {
+	cfg.keyName += string(symbol)
 
 	return nil
 }
 
-func newValue(state int, symbol rune) error {
-	if keyName != "" {
+func newValue(cfg *config, state int, symbol rune) error {
+	if cfg.keyName != "" {
 		option := new(tagOptions)
-		if meetSection { /* already meet section(s) */
-			if gLastSection.options == nil {
-				gLastSection.options = option
+		if cfg.meetSection { /* already meet section(s) */
+			if cfg.lastSection.options == nil {
+				cfg.lastSection.options = option
 			} else {
-				gLastOption.next = option
+				cfg.lastOption.next = option
 			}
 		} else {
-			gSections.name = ""           //global section's name is empty
-			if gSections.options == nil { /* no option yet */
-				gSections.options = option
+			cfg.sections.name = ""           //global section's name is empty
+			if cfg.sections.options == nil { /* no option yet */
+				cfg.sections.options = option
 			} else {
-				cur := gSections.options
+				cur := cfg.sections.options
 				for cur.next != nil {
 					cur = cur.next
 				}
 				cur.next = option
 			}
 		}
-		gLastOption = option
+		cfg.lastOption = option
 
-		gLastOption.name = keyName
-		keyName = ""
+		cfg.lastOption.name = cfg.keyName
+		cfg.keyName = ""
 	}
 	if symbol != '=' {
-		gLastOption.value += string(symbol)
+		cfg.lastOption.value += string(symbol)
 	}
 
 	/* InStr state, if string contains multiple lines. */
 	if symbol == '\n' {
-		line++
+		cfg.line++
 	}
 
 	return nil
 }
 
-func newLine(state int, symbol rune) error {
-	line++
+func newLine(cfg *config, state int, symbol rune) error {
+	cfg.line++
 	return nil
 }
 
 //FSM ACTION FUNCTIONS --  END
 
-func clearInnerData() {
-	gSections.options = nil
-	gSections.next = nil
-	gSections.name = ""
-
-	if gLastSection != nil {
-		if gLastSection.options != nil {
-			gLastSection.options = nil
-		}
-		gLastSection.next = nil
-		gLastSection.name = ""
-	}
-
-	if gLastOption != nil {
-		if gLastOption.next != nil {
-			gLastOption.next = nil
-		}
-		gLastOption.name = ""
-		gLastOption.value = ""
-	}
-
-	keyName, buffer = "", ""
-	meetSection, line = false, 1
-}
-
-func CfgParseFile(filename string) error {
-	fin, err := os.Open(filename)
-	if err != nil {
-	    return err
+func NewConfigFile(filename string) *Config {
+	fin, errOpen := os.Open(filename)
+	if errOpen != nil {
+		Printf("NewConfigFile failed, err=%v\n", errOpen.Error())
+		return nil
 	}
 	defer fin.Close()
 
-	return CfgParse(fin)
+	content, errRead := ioutil.ReadAll(fin)
+	if errRead != nil {
+		Printf("NewConfigFile failed, err=%v\n", errRead.Error())
+		return nil
+	}
+
+    return NewConfigReader(bytes.NewReader(content))
 }
 
-func CfgParse(r io.Reader) error {
+func NewConfigReader(r io.Reader) *Config {
+    return &Config{&config{reader:bufio.NewReader(r), line:1}}
+}
+
+func (self *Config) Parse() error {
+	return self.config.parse()
+
+}
+
+func (self *config) parse() error {
 	//Rules for describing the state change and associated actions for the FSM
 	fsm := []struct {
 		state    int  //current state
 		c        rune //current rune read
 		newState int  //next state
 		//FSM action to execute for a certain state
-		action func(state int, symbol rune) error
+		action func(cfg *config, state int, symbol rune) error
 	}{
 
 		/* state = [InOptions] - 0*/
@@ -223,18 +223,15 @@ func CfgParse(r io.Reader) error {
 
 		/* state = [CHECKLINE] - 7 */
 		{7, '\n', 0, newLine},
-		{7, 0,    0, newLine},
+		{7, 0, 0, newLine},
 
 		/* state = [Invalid] - 8 */
 		{8, 0, -1, parseError},
 	}
 
-	clearInnerData()
-
 	state := 0
-	line = 1
 
-	reader := bufio.NewReader(r)
+	reader := self.reader
 
 	var ch rune
 	var err error
@@ -249,7 +246,7 @@ func CfgParse(r io.Reader) error {
 			if currFsm.state == state && (currFsm.c == ch || currFsm.c == 0) {
 				/* state action */
 				if currFsm.action != nil {
-					if actionErr := currFsm.action(state, ch); actionErr != nil {
+					if actionErr := currFsm.action(self, state, ch); actionErr != nil {
 						return actionErr
 					}
 				}
@@ -268,14 +265,19 @@ func CfgParse(r io.Reader) error {
 }
 
 /* for debug only */
-func CfgPrint() {
+func (self *Config) print() {
+	self.config.cfgPrint()
+}
+
+/* for debug only */
+func (self *config) cfgPrint() {
 	var opt *tagOptions
 	var sec *tagSections
 
 	Println("\n==================RESULT:GLOBAL==================")
 
-	if len(gSections.name) == 0 { /* global option */
-		opt = gSections.options
+	if len(self.sections.name) == 0 { /* global option */
+		opt = self.sections.options
 
 		for opt != nil {
 			Printf("options key[%v], value=[%v]\n", opt.name, opt.value)
@@ -284,7 +286,7 @@ func CfgPrint() {
 	}
 
 	Printf("\n\n==================RESULT:SECTIONS==================")
-	sec = gSections.next
+	sec = self.sections.next
 	for sec != nil {
 		Printf("\nsection name=[%v]\n", sec.name)
 
@@ -298,18 +300,21 @@ func CfgPrint() {
 	} //end for
 }
 
-func CfgGet(section, key string) (out string, err error) {
+func (self *Config) Get(section, key string) (out string, err error) {
+	return self.config.get(section, key)
+}
+
+func (self *config) get(section, key string) (out string, err error) {
 	var opt *tagOptions
 	var sec *tagSections
 
 	out = ""
 
 	if len(section) == 0 { /* global options */
-		opt = gSections.options
+		opt = self.sections.options
 
 		for opt != nil {
 			if opt.name == key {
-				//out = opt.value[0:1] + opt.value[1:] //copy string
 				out = opt.value
 				return
 			}
@@ -320,13 +325,12 @@ func CfgGet(section, key string) (out string, err error) {
 		return
 	}
 
-	sec = gSections.next
+	sec = self.sections.next
 	for sec != nil {
 		if sec.name == section {
 			opt = sec.options
 			for opt != nil {
 				if opt.name == key {
-					//out = opt.value[0:1] + opt.value[1:] //copy string
 					out = opt.value
 					return
 				}
@@ -338,6 +342,7 @@ func CfgGet(section, key string) (out string, err error) {
 		sec = sec.next
 	} //end for
 
+    err = ErrKeyNotFound
 	return
 }
 
@@ -345,15 +350,6 @@ func main() {
 
 	var out string
 	var err error
-
-	//open file for reading
-	//fin, _ := os.Open("./test.ini")
-	//defer fin.Close()
-
-	//if err = CfgParse(fin); err != nil {
-	//	Printf("Error:%s", err.Error())
-	//	return
-	//}
 
 	//read from string
 	const testData = `
@@ -365,54 +361,63 @@ func main() {
 	author_email = "xxx@gmail.com"
 	author_age = 20
 	`
+	cfgReader := NewConfigReader(strings.NewReader(testData))
 
-	if err = CfgParse(strings.NewReader(testData)); err != nil {
-	//if err = CfgParse(bytes.NewBufferString(testData)); err != nil {  //OK, needs to import "bytes"
+	if err = cfgReader.Parse(); err != nil {
 		Printf("Error:%s", err.Error())
 	}
-	CfgPrint()
+	cfgReader.print()
 	Println("\n\n\n\n")
 
-
-
-	if err = CfgParseFile("./test.ini"); err != nil {
+	cfgFile := NewConfigFile("./test.ini")
+	if err = cfgFile.Parse(); err != nil {
 		Printf("Error:%s", err.Error())
 		return
 	}
 
 	Println("\n==================GET RESULT:GLOBAL==================")
-	out, _ = CfgGet("", "aa")
+	var section string
+	out, _ = cfgFile.Get("", "aa")
 	Printf("Global section, aa=[%v]\n", out)
 
-	out, _ = CfgGet("", "a")
+	out, _ = cfgFile.Get("", "a")
 	Printf("Global section, a=[%v]\n", out)
 
-	out, _ = CfgGet("", "b")
+	out, _ = cfgFile.Get("", "b")
 	Printf("Global section, b=[%v]\n", out)
 
-	out, _ = CfgGet("", "c")
+	out, _ = cfgFile.Get("", "c")
 	Printf("Global section, c=[%v]\n", out)
 
+	section = "ab;cdefg"
 	Println("\n==================GET RESULT:[ab;cdefg]==================")
-	out, _ = CfgGet("ab;cdefg", "c")
-	Printf("Named section[ab;cdefg], c=[%v]\n", out)
+	out, _ = cfgFile.Get(section, "c")
+	Printf("Named section[%v], c=[%v]\n", section, out)
 
-	out, _ = CfgGet("ab;cdefg", "d")
-	Printf("Named section[ab;cdefg], d=[%v]\n", out)
+	out, _ = cfgFile.Get(section, "d")
+	Printf("Named section[%v], d=[%v]\n", section, out)
 
-	out, _ = CfgGet("ab;cdefg", "e")
-	Printf("Named section[ab;cdefg], e=[%v]\n", out)
+	out, _ = cfgFile.Get(section, "e")
+	Printf("Named section[%v], e=[%v]\n", section, out)
 
 	Println("\n==================GET RESULT:[xxxx]==================")
-	out, _ = CfgGet("xxxx", "e")
-	Printf("Named section[xxxx], e=[%v]\n", out)
+	section = "xxxx"
+	out, _ = cfgFile.Get(section, "e")
+	Printf("Named section[%v], e=[%v]\n", section, out)
 
-	out, _ = CfgGet("xxxx", "m")
-	Printf("Named section[xxxx], m=[%v]\n", out)
+	out, _ = cfgFile.Get(section, "m")
+	Printf("Named section[%v], m=[%v]\n", section, out)
 
-	out, _ = CfgGet("xxxx", "n")
-	Printf("Named section[xxxx], n=[%v]\n", out)
+	out, _ = cfgFile.Get(section, "n")
+	Printf("Named section[%v], n=[%v]\n", section, out)
 
-	Println("\n==================[DEBUG]==================\n")
-	CfgPrint()
+	out, err  = cfgFile.Get(section, "ffff")
+    if err == ErrKeyNotFound {
+        Printf("Named section[%v], ffff is not found\n", section)
+    } else {
+        Printf("Named section[%v], ffff=[%v]\n", section, out)
+    }
+
+	Println("\n==================[DEBUG cfgFile]==================\n")
+	cfgFile.print()
 }
