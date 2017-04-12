@@ -2,16 +2,16 @@
 使用状态机实现的配置文件解析器
 
 ## 特性
-1. 简单轻量（API函数只有四个）
+1. 简单轻量
 2. 使用状态机实现
 3. 支持全局Section和自定义Section
 4. key-value的value支持多行
 5. 支持对不同回车换行符的正确解析
 
 ## API说明
-此解析器提供了四个API函数供用户使用。
+此解析器提供了以下的API函数供用户使用。
 
-1. 从文件创建一个新的配置
+1. 从文件filename创建一个新的配置
 ```go
 NewConfigFile(filename string)
 ```
@@ -32,6 +32,24 @@ Get(section, key string) (out string, err error)
     `section`: 块信息，如果为nil，就是被认为是全局Section  
     `key`:键信息
     `out`:键对应的值    
+
+5. 其它辅助方法
+```go
+//返回相应的简单类型的值,如果出现错误，则返回'def'
+Bool(section, key string, def bool) (out bool)
+Int(section, key string, def int) (out int)
+Int64(section, key string, def int64) (out int64)
+Uint(section, key string, def uint) (out uint)
+Uint64(section, key string, def uint64) (out uint64)
+Float64(section, key string, def float64) (out float64)
+Duration(section, key string, def time.Duration) (out time.Duration)
+
+//返回数组(仅支持字符串)
+Array(section, key string) []string
+
+//返回map(仅支持字符串)
+Map(section, key string) map[string]string
+```
 
 ## 使用
 配置文件请参照`test.ini`  

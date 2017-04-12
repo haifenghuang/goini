@@ -2,13 +2,15 @@ package main
 
 import (
 	"bufio"
-	"errors"
-	. "fmt"
-	"io"
 	"bytes"
-    "io/ioutil"
+	"errors"
+	"fmt"
+	"io"
+	"io/ioutil"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 //Represent a key-value
@@ -25,10 +27,12 @@ type tagSections struct {
 	name    string       //the name of the section
 }
 
+//Config struct represent a Configration
 type Config struct {
 	*config
 }
 
+//This is the real representation of a config
 type config struct {
 	reader      *bufio.Reader
 	sections    tagSections
@@ -38,11 +42,15 @@ type config struct {
 	buffer      string
 	meetSection bool
 	line        int
+	parsed      bool //prevent multiple call to Parse
 }
 
 var (
-	ErrParserError = errors.New("Parser error")
-	ErrMalFormed   = errors.New("Input is malformed, ends inside comment or literal")
+	//ErrParserError is the error returned when parsing error occurred
+	ErrParserError = errors.New("Parse error")
+	//ErrMalFormed is the error returned if configuration file is malformed
+	ErrMalFormed = errors.New("Input is malformed, ends inside comment or literal")
+	//ErrKeyNotFound is the error returned if searched key not found in configuration
 	ErrKeyNotFound = errors.New("key not found")
 )
 
@@ -133,33 +141,41 @@ func newLine(cfg *config, state int, symbol rune) error {
 
 //FSM ACTION FUNCTIONS --  END
 
+//NewConfigFile constrcut a new 'Config' object from 'filename'
 func NewConfigFile(filename string) *Config {
 	fin, errOpen := os.Open(filename)
 	if errOpen != nil {
-		Printf("NewConfigFile failed, err=%v\n", errOpen.Error())
+		fmt.Printf("NewConfigFile failed, err=%v\n", errOpen.Error())
 		return nil
 	}
 	defer fin.Close()
 
 	content, errRead := ioutil.ReadAll(fin)
 	if errRead != nil {
-		Printf("NewConfigFile failed, err=%v\n", errRead.Error())
+		fmt.Printf("NewConfigFile failed, err=%v\n", errRead.Error())
 		return nil
 	}
 
-    return NewConfigReader(bytes.NewReader(content))
+	return NewConfigReader(bytes.NewReader(content))
 }
 
+//NewConfigReader constrcut a new config file object from 'r'(io.Reader)
 func NewConfigReader(r io.Reader) *Config {
-    return &Config{&config{reader:bufio.NewReader(r), line:1}}
+	return &Config{&config{reader: bufio.NewReader(r), line: 1}}
 }
 
-func (self *Config) Parse() error {
-	return self.config.parse()
+//Parse parse a configuration file
+func (cfg *Config) Parse() error {
+	return cfg.config.parse()
 
 }
 
-func (self *config) parse() error {
+func (cfg *config) parse() error {
+	if cfg.parsed {
+		return nil
+	}
+	cfg.parsed = true
+
 	//Rules for describing the state change and associated actions for the FSM
 	fsm := []struct {
 		state    int  //current state
@@ -231,7 +247,7 @@ func (self *config) parse() error {
 
 	state := 0
 
-	reader := self.reader
+	reader := cfg.reader
 
 	var ch rune
 	var err error
@@ -246,7 +262,7 @@ func (self *config) parse() error {
 			if currFsm.state == state && (currFsm.c == ch || currFsm.c == 0) {
 				/* state action */
 				if currFsm.action != nil {
-					if actionErr := currFsm.action(self, state, ch); actionErr != nil {
+					if actionErr := currFsm.action(cfg, state, ch); actionErr != nil {
 						return actionErr
 					}
 				}
@@ -257,61 +273,172 @@ func (self *config) parse() error {
 	} //outer for
 
 	if state != 0 {
-		Printf("state is %d\n", state)
+		fmt.Printf("state is %d\n", state)
 		return ErrMalFormed
 	}
 
 	return nil
 }
 
-/* for debug only */
-func (self *Config) print() {
-	self.config.cfgPrint()
-}
-
-/* for debug only */
-func (self *config) cfgPrint() {
-	var opt *tagOptions
-	var sec *tagSections
-
-	Println("\n==================RESULT:GLOBAL==================")
-
-	if len(self.sections.name) == 0 { /* global option */
-		opt = self.sections.options
-
-		for opt != nil {
-			Printf("options key[%v], value=[%v]\n", opt.name, opt.value)
-			opt = opt.next
-		} //end for
+//Bool returns an boolean value for a 'key' in 'section', if failed, will return 'def'
+func (cfg *Config) Bool(section, key string, def bool) (out bool) {
+	out = def
+	outStr, err := cfg.Get(section, key)
+	if err != nil {
+		return
 	}
 
-	Printf("\n\n==================RESULT:SECTIONS==================")
-	sec = self.sections.next
-	for sec != nil {
-		Printf("\nsection name=[%v]\n", sec.name)
+	out, err = strconv.ParseBool(outStr)
 
-		opt = sec.options
-		for opt != nil {
-			Printf("\toptions key[%v], value=[%v]\n", opt.name, opt.value)
-			opt = opt.next
-		} //end inner for
-
-		sec = sec.next
-	} //end for
+	return
 }
 
-func (self *Config) Get(section, key string) (out string, err error) {
-	return self.config.get(section, key)
+//Int returns an int value for a 'key' in 'section', if failed, will return 'def'
+func (cfg *Config) Int(section, key string, def int) (out int) {
+	out = def
+	outStr, err := cfg.Get(section, key)
+	if err != nil {
+		return
+	}
+
+	out64, err := strconv.ParseInt(outStr, 0, 64)
+	if err != nil {
+		return
+	}
+	out = int(out64)
+
+	return
 }
 
-func (self *config) get(section, key string) (out string, err error) {
+//Int64 returns an int value for a 'key' in 'section', if failed, will return 'def'
+func (cfg *Config) Int64(section, key string, def int64) (out int64) {
+	out = def
+	outStr, err := cfg.Get(section, key)
+	if err != nil {
+		return
+	}
+
+	out64, err := strconv.ParseInt(outStr, 0, 64)
+	if err != nil {
+		return
+	}
+	out = out64
+
+	return
+}
+
+//Uint returns an uint value for a 'key' in 'section', if failed, will return 'def'
+func (cfg *Config) Uint(section, key string, def uint) (out uint) {
+	out = def
+	outStr, err := cfg.Get(section, key)
+	if err != nil {
+		return
+	}
+
+	out64, err := strconv.ParseUint(outStr, 0, 64)
+	if err != nil {
+		return
+	}
+	out = uint(out64)
+
+	return
+}
+
+//Uint64 returns an uint64 value for a 'key' in 'section', if failed, will return 'def'
+func (cfg *Config) Uint64(section, key string, def uint64) (out uint64) {
+	out = def
+	outStr, err := cfg.Get(section, key)
+	if err != nil {
+		return
+	}
+
+	out64, err := strconv.ParseUint(outStr, 0, 64)
+	if err != nil {
+		return
+	}
+	out = uint64(out64)
+
+	return
+}
+
+//Float64 returns an float64 value for a 'key' in 'section', if failed, will return 'def'
+func (cfg *Config) Float64(section, key string, def float64) (out float64) {
+	out = def
+	outStr, err := cfg.Get(section, key)
+	if err != nil {
+		return
+	}
+
+	out64, err := strconv.ParseFloat(outStr, 64)
+	if err != nil {
+		return
+	}
+	out = out64
+
+	return
+}
+
+//Duration returns an time.Duration value for a 'key' in 'section', if failed, will return 'def'
+func (cfg *Config) Duration(section, key string, def time.Duration) (out time.Duration) {
+	out = def
+	outStr, err := cfg.Get(section, key)
+	if err != nil {
+		return
+	}
+
+	outDuration, err := time.ParseDuration(outStr)
+	if err != nil {
+		return
+	}
+	out = outDuration
+
+	return
+}
+
+//Array returns an array for a 'key' in 'section', if failed, will return [].
+//e.g. key1=1,2,3,4 returns ["1", "2", "3", "4"]
+//Note: it assumes the values are all "string"s
+func (cfg *Config) Array(section, key string) []string {
+	value, err := cfg.Get(section, key)
+	if err != nil {
+		return make([]string, 0)
+	}
+
+	return strings.Split(value, ",")
+
+}
+
+//Map returns a map for a 'key' in 'section', if failed, will return an empty map[string]string.
+//e.g. demo = key1:value1, key2, value2, key3, value3
+func (cfg *Config) Map(section, key string) map[string]string {
+	outStr, err := cfg.Get(section, key)
+	if err != nil {
+		return make(map[string]string, 0)
+	}
+
+	subStrs := strings.Split(outStr, ",")
+	out := make(map[string]string, len(subStrs))
+
+	for _, subStr := range subStrs {
+		pair := strings.Split(subStr, ":")
+		out[pair[0]] = pair[1]
+	}
+	return out
+}
+
+//Get search a 'key' from 'section', returns key value 'out' and 'err'
+func (cfg *Config) Get(section, key string) (out string, err error) {
+	return cfg.config.get(section, key)
+}
+
+func (cfg *config) get(section, key string) (out string, err error) {
 	var opt *tagOptions
 	var sec *tagSections
 
 	out = ""
 
 	if len(section) == 0 { /* global options */
-		opt = self.sections.options
+		opt = cfg.sections.options
 
 		for opt != nil {
 			if opt.name == key {
@@ -325,7 +452,7 @@ func (self *config) get(section, key string) (out string, err error) {
 		return
 	}
 
-	sec = self.sections.next
+	sec = cfg.sections.next
 	for sec != nil {
 		if sec.name == section {
 			opt = sec.options
@@ -342,8 +469,44 @@ func (self *config) get(section, key string) (out string, err error) {
 		sec = sec.next
 	} //end for
 
-    err = ErrKeyNotFound
+	err = ErrKeyNotFound
 	return
+}
+
+/* for debug only */
+func (cfg *Config) print() {
+	cfg.config.cfgPrint()
+}
+
+/* for debug only */
+func (cfg *config) cfgPrint() {
+	var opt *tagOptions
+	var sec *tagSections
+
+	fmt.Println("\n==================RESULT:GLOBAL==================")
+
+	if len(cfg.sections.name) == 0 { /* global option */
+		opt = cfg.sections.options
+
+		for opt != nil {
+			fmt.Printf("options key[%v], value=[%v]\n", opt.name, opt.value)
+			opt = opt.next
+		} //end for
+	}
+
+	fmt.Printf("\n\n==================RESULT:SECTIONS==================")
+	sec = cfg.sections.next
+	for sec != nil {
+		fmt.Printf("\nsection name=[%v]\n", sec.name)
+
+		opt = sec.options
+		for opt != nil {
+			fmt.Printf("\toptions key[%v], value=[%v]\n", opt.name, opt.value)
+			opt = opt.next
+		} //end inner for
+
+		sec = sec.next
+	} //end for
 }
 
 func main() {
@@ -364,60 +527,73 @@ func main() {
 	cfgReader := NewConfigReader(strings.NewReader(testData))
 
 	if err = cfgReader.Parse(); err != nil {
-		Printf("Error:%s", err.Error())
+		fmt.Printf("Error:%s", err.Error())
 	}
 	cfgReader.print()
-	Println("\n\n\n\n")
+	fmt.Printf("\n\n\n\n")
 
 	cfgFile := NewConfigFile("./test.ini")
 	if err = cfgFile.Parse(); err != nil {
-		Printf("Error:%s", err.Error())
+		fmt.Printf("Error:%s", err.Error())
 		return
 	}
 
-	Println("\n==================GET RESULT:GLOBAL==================")
+	fmt.Println("\n==================GET RESULT:GLOBAL==================")
 	var section string
 	out, _ = cfgFile.Get("", "aa")
-	Printf("Global section, aa=[%v]\n", out)
+	fmt.Printf("Global section, aa=[%v]\n", out)
 
 	out, _ = cfgFile.Get("", "a")
-	Printf("Global section, a=[%v]\n", out)
+	fmt.Printf("Global section, a=[%v]\n", out)
 
 	out, _ = cfgFile.Get("", "b")
-	Printf("Global section, b=[%v]\n", out)
+	fmt.Printf("Global section, b=[%v]\n", out)
 
 	out, _ = cfgFile.Get("", "c")
-	Printf("Global section, c=[%v]\n", out)
+	fmt.Printf("Global section, c=[%v]\n", out)
 
 	section = "ab;cdefg"
-	Println("\n==================GET RESULT:[ab;cdefg]==================")
+	fmt.Println("\n==================GET RESULT:[ab;cdefg]==================")
 	out, _ = cfgFile.Get(section, "c")
-	Printf("Named section[%v], c=[%v]\n", section, out)
+	fmt.Printf("Named section[%v], c=[%v]\n", section, out)
 
 	out, _ = cfgFile.Get(section, "d")
-	Printf("Named section[%v], d=[%v]\n", section, out)
+	fmt.Printf("Named section[%v], d=[%v]\n", section, out)
 
 	out, _ = cfgFile.Get(section, "e")
-	Printf("Named section[%v], e=[%v]\n", section, out)
+	fmt.Printf("Named section[%v], e=[%v]\n", section, out)
 
-	Println("\n==================GET RESULT:[xxxx]==================")
+	fmt.Println("\n==================GET RESULT:[xxxx]==================")
 	section = "xxxx"
 	out, _ = cfgFile.Get(section, "e")
-	Printf("Named section[%v], e=[%v]\n", section, out)
+	fmt.Printf("Named section[%v], e=[%v]\n", section, out)
 
 	out, _ = cfgFile.Get(section, "m")
-	Printf("Named section[%v], m=[%v]\n", section, out)
+	fmt.Printf("Named section[%v], m=[%v]\n", section, out)
+
+	outUint := cfgFile.Int(section, "m", 10)
+	fmt.Printf("outUint=[%v]\n", outUint)
+
+	lists := cfgFile.Array(section, "list")
+	for idx, list := range lists {
+		fmt.Printf("list[%d] = [%v]\n", idx, list)
+	}
+
+	maps := cfgFile.Map(section, "map")
+	for key, value := range maps {
+		fmt.Printf("[%v] = [%v]\n", key, value)
+	}
 
 	out, _ = cfgFile.Get(section, "n")
-	Printf("Named section[%v], n=[%v]\n", section, out)
+	fmt.Printf("Named section[%v], n=[%v]\n", section, out)
 
-	out, err  = cfgFile.Get(section, "ffff")
-    if err == ErrKeyNotFound {
-        Printf("Named section[%v], ffff is not found\n", section)
-    } else {
-        Printf("Named section[%v], ffff=[%v]\n", section, out)
-    }
+	out, err = cfgFile.Get(section, "ffff")
+	if err == ErrKeyNotFound {
+		fmt.Printf("Named section[%v], ffff is not found\n", section)
+	} else {
+		fmt.Printf("Named section[%v], ffff=[%v]\n", section, out)
+	}
 
-	Println("\n==================[DEBUG cfgFile]==================\n")
+	fmt.Printf("\n==================[DEBUG cfgFile]==================\n")
 	cfgFile.print()
 }
