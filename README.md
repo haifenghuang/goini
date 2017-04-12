@@ -44,10 +44,10 @@ Uint64(section, key string, def uint64) (out uint64)
 Float64(section, key string, def float64) (out float64)
 Duration(section, key string, def time.Duration) (out time.Duration)
 
-//返回数组(仅支持字符串)
+//返回数组(仅支持字符串, 且字符串中不允许有逗号，不允许多行)
 Array(section, key string) []string
 
-//返回map(仅支持字符串)
+//返回map(仅支持字符串, 且字符串中不允许有逗号，不允许多行)
 Map(section, key string) map[string]string
 ```
 
